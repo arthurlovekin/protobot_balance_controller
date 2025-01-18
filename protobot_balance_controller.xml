@@ -1,0 +1,7 @@
+<library path="protobot_balance_controller">
+  <class name="protobot_balance_controller/ProtobotBalanceController" type="protobot_balance_controller::ProtobotBalanceController" base_class_type="controller_interface::ChainableControllerInterface">
+  <description>
+    The protobot balance controller transforms linear and angular velocity messages into a linear and angular velocity for the diff_drive_controller.
+  </description>
+  </class>
+</library>
