@@ -1,0 +1,58 @@
+protobot_balance_controller:
+  command_interfaces: {
+    type: string_array,
+    default_value: ["linear_velocity_x", "angular_velocity_z"],
+    description: "Names of the command interfaces to be controlled",
+    validation: {
+      not_empty<>: [],
+      unique<>: []
+    }
+  }
+
+  kp: {
+    type: double,
+    default_value: 1.0,
+    description: "Proportional gain"
+  }
+
+  ki: {
+    type: double,
+    default_value: 0.0,
+    description: "Integral gain"
+  }
+
+  kd: {
+    type: double,
+    default_value: 0.0,
+    description: "Derivative gain"
+  }
+
+  pitch_0_degrees: {
+    type: double,
+    default_value: 30.0,
+    description: "Pitch of the robot when it is at its balancing point"
+  }
+
+  setpoint_scale: {
+    type: double,
+    default_value: 1.0,
+    description: "Scale the input linear velocity (m/s) into an angle (degrees) that gets added to pitch_0_degrees to determine the setpoint"
+  }
+
+  pitch_threshold_degrees: {
+    type: double,
+    default_value: 0.0,
+    description: "If the pitch of the robot exceeds this threshold, then switch to balance-mode. Otherwise, stay in diff-drive mode."
+  }
+
+  angular_velocity_scale: {
+    type: double,
+    default_value: 1.0,
+    description: "Scale the input angular velocity (rad/s) by a constant factor"
+  }
+
+  cmd_vel_timeout_seconds: {
+    type: double,
+    default_value: 0.5,
+    description: "Timeout to consider cmd_vel commands old"
+  }

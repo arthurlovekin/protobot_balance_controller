@@ -12,11 +12,9 @@ There is also a node that will monitor the pitch of the robot as it drives, and 
 
 The angular velocity gets linearly scaled down but otherwise passes through unchanged to the diff_drive_controller.
 
-In summary, we have the following constants that need to be tuned:
-- pitch_0 (deg): the pitch of the robot when it is at its (unstable) balancing point. This is a function of the center of mass. 
-- setpoint_constant (s/m): determines how much to lean forward for a given linear velocity command. 
-- pitch_threshold (deg): If the pitch of the robot exceeds this threshold, then switch to balance-mode. Otherwise, stay in diff-drive mode.
-- angular_velocity_scale (unitless)
-- K_p
-- K_i
-- K_d
+See the test/config folder for examples of these parameters with their description.
+
+Tutorials:
+[ros2_control Writing a new controller](https://control.ros.org/rolling/doc/ros2_controllers/doc/writing_new_controller.html)
+[ros2_control_demos Example 7: Full Tutorial with 6DOF robot](https://control.ros.org/rolling/doc/ros2_control_demos/example_7/doc/userdoc.html)
+
