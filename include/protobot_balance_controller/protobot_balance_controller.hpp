@@ -62,12 +62,18 @@ class ProtobotBalanceController : public controller_interface::ChainableControll
     Params params_;
 
     //// PID variables ////
+    bool pid_enabled_;
     double pitch_setpoint_degrees_;
     double pitch_error_;
     double prev_pitch_error_;
     double pitch_integral_;
-
+    double pitch_derivative_;
     bool reset_pid();
+
+    // // Command and state interfaces
+    // std::reference_wrapper<hardware_interface::LoanedCommandInterface> linear_command_interface_;
+    // std::reference_wrapper<hardware_interface::LoanedCommandInterface> angular_command_interface_;
+    // std::reference_wrapper<const hardware_interface::LoanedStateInterface> pitch_state_interface_;
 
     // For Chainable Controller, we maintain a realtime buffer that can either
     // be filled by the publisher (non-realtime) or when it gets changed by an 

@@ -77,12 +77,10 @@ controller_interface::InterfaceConfiguration ProtobotBalanceController::command_
   controller_interface::InterfaceConfiguration command_interfaces_config;
   command_interfaces_config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
 
-  std::vector<std::string> configuration_names;
-  for (const auto & interface_name : params_.command_interfaces)
-  {
-    configuration_names.push_back(interface_name);
-  }
-  command_interfaces_config.names = configuration_names;
+  command_interfaces_config.names = {
+    params_.linear_command_interface,
+    params_.angular_command_interface
+  };
 
   return command_interfaces_config;
 }
@@ -90,8 +88,10 @@ controller_interface::InterfaceConfiguration ProtobotBalanceController::command_
 controller_interface::InterfaceConfiguration ProtobotBalanceController::state_interface_configuration() const
 {
   controller_interface::InterfaceConfiguration state_interfaces_config;
-  state_interfaces_config.type = controller_interface::interface_configuration_type::NONE;
-  state_interfaces_config.names = {};
+  state_interfaces_config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
+  state_interfaces_config.names = {
+    params_.pitch_state_interface
+  };
   return state_interfaces_config;
 }
 
@@ -149,13 +149,11 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
 }
 
 controller_interface::return_type ProtobotBalanceController::update_and_write_commands(
-  const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+  const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
-  // command may be limited further by SpeedLimit,
-  // without affecting the stored twist command
-  const double linear_command = reference_interfaces_[0];
-  const double angular_command = reference_interfaces_[1];
-  const double pitch_reference = reference_interfaces_[2];
+  double linear_command = reference_interfaces_[0];
+  double angular_command = reference_interfaces_[1];
+  const double pitch_reference = state_interfaces_[0].get_value();
 
   if (!std::isfinite(linear_command) || !std::isfinite(angular_command) || !std::isfinite(pitch_reference))
   {
@@ -166,15 +164,61 @@ controller_interface::return_type ProtobotBalanceController::update_and_write_co
   // If the pitch is lower than the pitch_threshold_degrees_, then pass the command through untouched
   if (pitch_reference < params_.pitch_threshold_degrees)
   {
-    // TODO: set 
+    if(pid_enabled_)
+    {
+      pid_enabled_ = false;
+      RCLCPP_INFO(get_node()->get_logger(), "PID controller disabled");
+    }
   }
   else 
   {
     // If the pitch is higher than the pitch_threshold_degrees_, then apply the PID controller
     // TODO: Implement PID controller
-    reference_interfaces_[0] = reference_interfaces_[0];
-    reference_interfaces_[1] = reference_interfaces_[1];
+    if (!pid_enabled_) 
+    {
+      pid_enabled_ = true;
+      RCLCPP_INFO(get_node()->get_logger(), "PID controller enabled");
+    }
+    if (param_listener_->is_old(params_))
+    {
+      params_ = param_listener_->get_params();
+      RCLCPP_INFO_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000, "PID parameters were updated (logs every second)");
+    }
+
+    pitch_setpoint_degrees_ = params_.pitch_0_degrees + params_.setpoint_gain * linear_command;
+    pitch_error_ = pitch_reference - pitch_setpoint_degrees_;
+    pitch_derivative_ = (pitch_error_ - prev_pitch_error_) / period.seconds();
+    pitch_integral_ += pitch_error_ * period.seconds();
+    if (pitch_integral_ > params_.antiwindup_integral_max)
+    {
+      pitch_integral_ = params_.antiwindup_integral_max;
+    }
+    else if (pitch_integral_ < params_.antiwindup_integral_min)
+    {
+      pitch_integral_ = params_.antiwindup_integral_min;
+    }
+
+    linear_command = 
+      params_.kp * pitch_error_ +
+      params_.ki * pitch_integral_ + 
+      params_.kd * pitch_derivative_;
+    angular_command = params_.angular_velocity_gain * angular_command;
+    prev_pitch_error_ = pitch_error_;
   }
+
+  // Set the command interfaces
+
+  if(!command_interfaces_[0].set_value(linear_command))
+  {
+    RCLCPP_ERROR(get_node()->get_logger(), "Failed to set linear command");
+    return controller_interface::return_type::ERROR;
+  }
+  if(!command_interfaces_[1].set_value(angular_command))
+  {
+    RCLCPP_ERROR(get_node()->get_logger(), "Failed to set angular command");
+    return controller_interface::return_type::ERROR;
+  }
+
   return controller_interface::return_type::OK;
 }
 
@@ -206,30 +250,30 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_error(
 
 bool ProtobotBalanceController::reset_pid()
 {
+  pid_enabled_ = false;
   pitch_setpoint_degrees_ = params_.pitch_0_degrees;
   pitch_error_ = 0.0;
   prev_pitch_error_ = 0.0;
   pitch_integral_ = 0.0;
+  pitch_derivative_ = 0.0;
   return true;
 }
 
 std::vector<hardware_interface::CommandInterface> ProtobotBalanceController::on_export_reference_interfaces()
 {
-  // inputs to this controller: linear command, angular command, and pitch reference
-  const int n_reference_interfaces = 3; 
+  // inputs to this controller: linear command, angular command
+  const int n_reference_interfaces = 2; 
   reference_interfaces_.resize(n_reference_interfaces, std::numeric_limits<double>::quiet_NaN());
   std::vector<hardware_interface::CommandInterface> reference_interfaces;
   reference_interfaces.reserve(n_reference_interfaces);
 
   reference_interfaces.push_back(hardware_interface::CommandInterface(
-    get_node()->get_name(), std::string("linear_velocity_x"),
+    get_node()->get_name(), std::string("linear_throttle"),
     &reference_interfaces_[0]));
   reference_interfaces.push_back(hardware_interface::CommandInterface(
-    get_node()->get_name(), std::string("angular_velocity_z"),
+    get_node()->get_name(), std::string("angular_throttle"),
     &reference_interfaces_[1]));
-  reference_interfaces.push_back(hardware_interface::CommandInterface(
-    get_node()->get_name(), std::string("pitch_reference"),
-    &reference_interfaces_[2]));
+
   return reference_interfaces;
 }
 

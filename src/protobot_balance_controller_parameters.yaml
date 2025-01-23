@@ -1,11 +1,28 @@
 protobot_balance_controller:
-  command_interfaces: {
-    type: string_array,
-    default_value: ["linear_velocity_x", "angular_velocity_z"],
-    description: "Names of the command interfaces to be controlled",
+  linear_command_interface: {
+    type: string,
+    default_value: "linear",
+    description: "Name of the linear command interface",
     validation: {
-      not_empty<>: [],
-      unique<>: []
+      not_empty<>: []
+    }
+  }
+
+  angular_command_interface: {
+    type: string,
+    default_value: "angular",
+    description: "Name of the angular command interface",
+    validation: {
+      not_empty<>: []
+    }
+  }
+
+  pitch_state_interface: {
+    type: string,
+    default_value: "pitch",
+    description: "Name of the pitch state interface",
+    validation: {
+      not_empty<>: []
     }
   }
 
@@ -27,13 +44,25 @@ protobot_balance_controller:
     description: "Derivative gain"
   }
 
+  antiwindup_integral_max: {
+    type: double,
+    default_value: 10.0,
+    description: "Maximum value for the integral term"
+  }
+
+  antiwindup_integral_min: {
+    type: double,
+    default_value: -10.0,
+    description: "Minimum value for the integral term"
+  }
+
   pitch_0_degrees: {
     type: double,
     default_value: 30.0,
     description: "Pitch of the robot when it is at its balancing point"
   }
 
-  setpoint_scale: {
+  setpoint_gain: {
     type: double,
     default_value: 1.0,
     description: "Scale the input linear velocity (m/s) into an angle (degrees) that gets added to pitch_0_degrees to determine the setpoint"
@@ -41,11 +70,11 @@ protobot_balance_controller:
 
   pitch_threshold_degrees: {
     type: double,
-    default_value: 0.0,
+    default_value: 20.0,
     description: "If the pitch of the robot exceeds this threshold, then switch to balance-mode. Otherwise, stay in diff-drive mode."
   }
 
-  angular_velocity_scale: {
+  angular_velocity_gain: {
     type: double,
     default_value: 1.0,
     description: "Scale the input angular velocity (rad/s) by a constant factor"
@@ -54,5 +83,8 @@ protobot_balance_controller:
   cmd_vel_timeout_seconds: {
     type: double,
     default_value: 0.5,
-    description: "Timeout to consider cmd_vel commands old"
+    description: "Timeout to consider cmd_vel commands old",
+    validation: {
+      gt_eq<>: [0.0]
+    }
   }

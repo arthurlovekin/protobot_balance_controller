@@ -17,4 +17,6 @@ See the test/config folder for examples of these parameters with their descripti
 Tutorials:
 [ros2_control Writing a new controller](https://control.ros.org/rolling/doc/ros2_controllers/doc/writing_new_controller.html)
 [ros2_control_demos Example 7: Full Tutorial with 6DOF robot](https://control.ros.org/rolling/doc/ros2_control_demos/example_7/doc/userdoc.html)
+[ROS2 Plguinlib tutorial](https://docs.ros.org/en/jazzy/Tutorials/Beginner-Client-Libraries/Pluginlib.html)
+[ROS2 generate_parameters_library](https://github.com/PickNikRobotics/generate_parameter_library)
 
