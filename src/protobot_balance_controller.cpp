@@ -1,4 +1,6 @@
 #include "protobot_balance_controller/protobot_balance_controller.hpp"
+#include "tf2/exceptions.h"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 
 namespace protobot_balance_controller
 {
@@ -31,8 +33,6 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_configure(con
     RCLCPP_INFO(get_node()->get_logger(), "Parameters were updated");
   }
 
-  // cmd_vel_timeout_seconds_ = rclcpp::Duration::from_seconds(params_.cmd_vel_timeout_seconds);
-
   cmd_vel_subscriber_ = get_node()->create_subscription<geometry_msgs::msg::TwistStamped>(
     "~/cmd_vel", rclcpp::SystemDefaultsQoS(),
     [this](const std::shared_ptr<geometry_msgs::msg::TwistStamped> msg) -> void
@@ -62,12 +62,17 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_configure(con
       {
         RCLCPP_WARN(
           get_node()->get_logger(),
-          "Ignoring the received message (timestamp %.10f) because it is older than "
-          "the current time by %.10f seconds, which exceeds the allowed timeout (%.4f)",
+          "Ignoring the received TwistStamped message (timestamp %.10f) because"
+          " it is older than the current time by %.10f seconds, which exceeds"
+          " the allowed timeout (%.4f)",
           msg_time, time_difference,
           params_.cmd_vel_timeout_seconds);
       }
     });
+
+  // create a tf listener to get the pitch of the odom->base_link transform
+  tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_node()->get_clock());
+  tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -88,10 +93,8 @@ controller_interface::InterfaceConfiguration ProtobotBalanceController::command_
 controller_interface::InterfaceConfiguration ProtobotBalanceController::state_interface_configuration() const
 {
   controller_interface::InterfaceConfiguration state_interfaces_config;
-  state_interfaces_config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
-  state_interfaces_config.names = {
-    params_.pitch_state_interface
-  };
+  state_interfaces_config.type = controller_interface::interface_configuration_type::NONE;
+  state_interfaces_config.names = {};
   return state_interfaces_config;
 }
 
@@ -145,6 +148,45 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
       "Command message contains NaNs. Not updating reference interfaces.");
   }
 
+  // Get the pitch of the odom->base_link transform
+  geometry_msgs::msg::TransformStamped transform;
+  try {
+    transform = tf_buffer_->lookupTransform(
+      params_.odom_frame_id,
+      params_.base_link_frame_id,
+      tf2::TimePointZero
+    );
+  } catch (const tf2::TransformException & ex) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Could not transform %s to %s: %s",
+      params_.odom_frame_id.c_str(),
+      params_.base_link_frame_id.c_str(),
+      ex.what()
+    );
+    return controller_interface::return_type::ERROR;
+  }
+
+  tf2::Quaternion orientation(
+    transform.transform.rotation.x,
+    transform.transform.rotation.y,
+    transform.transform.rotation.z,
+    transform.transform.rotation.w
+  );
+  double roll, pitch, yaw;
+  tf2::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
+  if (std::isfinite(pitch))
+  {
+    reference_interfaces_[2] = pitch;
+  }
+  else
+  {
+    RCLCPP_WARN_SKIPFIRST_THROTTLE(
+      get_node()->get_logger(),
+      *get_node()->get_clock(),
+      params_.cmd_vel_timeout_seconds * 1000,
+      "Transform pitch is not finite. Not updating reference interfaces."
+    );
+  }
+
   return controller_interface::return_type::OK;
 }
 
@@ -153,7 +195,7 @@ controller_interface::return_type ProtobotBalanceController::update_and_write_co
 {
   double linear_command = reference_interfaces_[0];
   double angular_command = reference_interfaces_[1];
-  const double pitch_reference = state_interfaces_[0].get_value();
+  const double pitch_reference = reference_interfaces_[2];
 
   if (!std::isfinite(linear_command) || !std::isfinite(angular_command) || !std::isfinite(pitch_reference))
   {
@@ -262,7 +304,7 @@ bool ProtobotBalanceController::reset_pid()
 std::vector<hardware_interface::CommandInterface> ProtobotBalanceController::on_export_reference_interfaces()
 {
   // inputs to this controller: linear command, angular command
-  const int n_reference_interfaces = 2; 
+  const int n_reference_interfaces = 3; 
   reference_interfaces_.resize(n_reference_interfaces, std::numeric_limits<double>::quiet_NaN());
   std::vector<hardware_interface::CommandInterface> reference_interfaces;
   reference_interfaces.reserve(n_reference_interfaces);
@@ -273,6 +315,9 @@ std::vector<hardware_interface::CommandInterface> ProtobotBalanceController::on_
   reference_interfaces.push_back(hardware_interface::CommandInterface(
     get_node()->get_name(), std::string("angular_throttle"),
     &reference_interfaces_[1]));
+  reference_interfaces.push_back(hardware_interface::CommandInterface(
+    get_node()->get_name(), std::string("pitch"),
+    &reference_interfaces_[2]));
 
   return reference_interfaces;
 }
