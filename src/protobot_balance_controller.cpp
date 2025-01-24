@@ -14,6 +14,7 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_init()
   {
     param_listener_ = std::make_shared<ParamListener>(get_node());
     params_ = param_listener_->get_params();
+    cmd_vel_buffer_ = realtime_tools::RealtimeBuffer<std::shared_ptr<geometry_msgs::msg::TwistStamped>>();
   }
   catch (const std::exception & e)
   {
@@ -122,7 +123,7 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
 
   if (command_msg_ptr == nullptr)
   {
-    RCLCPP_WARN(get_node()->get_logger(), "Velocity message received was a nullptr.");
+    RCLCPP_WARN(get_node()->get_logger(), "Velocity message received was a nullptr, which should never happen. Was it configured correctly?");
     return controller_interface::return_type::ERROR;
   }
 
@@ -298,6 +299,14 @@ bool ProtobotBalanceController::reset_pid()
   prev_pitch_error_ = 0.0;
   pitch_integral_ = 0.0;
   pitch_derivative_ = 0.0;
+
+  // Empty the cmd_vel_buffer_ then fill it with a single NaN
+  cmd_vel_buffer_.reset();
+  std::shared_ptr<geometry_msgs::msg::TwistStamped> nan_msg = std::make_shared<geometry_msgs::msg::TwistStamped>();
+  nan_msg->header.stamp = get_node()->now();
+  nan_msg->twist.linear.x = std::numeric_limits<double>::quiet_NaN();
+  nan_msg->twist.angular.z = std::numeric_limits<double>::quiet_NaN();
+  cmd_vel_buffer_.writeFromNonRT(nan_msg);
   return true;
 }
 

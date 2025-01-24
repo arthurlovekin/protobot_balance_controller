@@ -80,7 +80,7 @@ class ProtobotBalanceController : public controller_interface::ChainableControll
     // For Chainable Controller, we maintain a realtime buffer that can either
     // be filled by the publisher (non-realtime) or when it gets changed by an 
     // upstream controller (realtime). This gets read from in update_and_write_commands()
-    realtime_tools::RealtimeBuffer<std::shared_ptr<geometry_msgs::msg::TwistStamped>> cmd_vel_buffer_{nullptr};
+    realtime_tools::RealtimeBuffer<std::shared_ptr<geometry_msgs::msg::TwistStamped>> cmd_vel_buffer_;
 
     // Chainable controller also has extra functions to switch in and out of chained mode
     std::vector<hardware_interface::CommandInterface> on_export_reference_interfaces() override;
