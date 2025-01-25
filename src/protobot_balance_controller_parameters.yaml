@@ -17,7 +17,7 @@ protobot_balance_controller:
     }
   }
 
-  base_link_frame_id: {
+  base_frame_id: {
     type: string,
     default_value: "base_link",
     description: "Find the pitch of the base_link with respect to the odom_frame"

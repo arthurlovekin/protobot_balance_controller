@@ -154,16 +154,20 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
   try {
     transform = tf_buffer_->lookupTransform(
       params_.odom_frame_id,
-      params_.base_link_frame_id,
+      params_.base_frame_id,
       tf2::TimePointZero
     );
   } catch (const tf2::TransformException & ex) {
-    RCLCPP_ERROR(get_node()->get_logger(), "Could not transform %s to %s: %s",
+    RCLCPP_ERROR_THROTTLE(
+      get_node()->get_logger(),
+      *get_node()->get_clock(),
+      params_.cmd_vel_timeout_seconds * 1000,
+      "Throttled Error: Not setting pitch reference because could not transform %s to %s (%s)",
       params_.odom_frame_id.c_str(),
-      params_.base_link_frame_id.c_str(),
+      params_.base_frame_id.c_str(),
       ex.what()
     );
-    return controller_interface::return_type::ERROR;
+    return controller_interface::return_type::OK;
   }
 
   tf2::Quaternion orientation(
@@ -319,10 +323,10 @@ std::vector<hardware_interface::CommandInterface> ProtobotBalanceController::on_
   reference_interfaces.reserve(n_reference_interfaces);
 
   reference_interfaces.push_back(hardware_interface::CommandInterface(
-    get_node()->get_name(), std::string("linear_throttle"),
+    get_node()->get_name(), std::string("linear"),
     &reference_interfaces_[0]));
   reference_interfaces.push_back(hardware_interface::CommandInterface(
-    get_node()->get_name(), std::string("angular_throttle"),
+    get_node()->get_name(), std::string("angular"),
     &reference_interfaces_[1]));
   reference_interfaces.push_back(hardware_interface::CommandInterface(
     get_node()->get_name(), std::string("pitch"),
