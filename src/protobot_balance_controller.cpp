@@ -158,7 +158,7 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
       tf2::TimePointZero
     );
   } catch (const tf2::TransformException & ex) {
-    RCLCPP_ERROR_THROTTLE(
+    RCLCPP_ERROR_SKIPFIRST_THROTTLE(
       get_node()->get_logger(),
       *get_node()->get_clock(),
       params_.cmd_vel_timeout_seconds * 1000,
@@ -202,14 +202,20 @@ controller_interface::return_type ProtobotBalanceController::update_and_write_co
   double angular_command = reference_interfaces_[1];
   const double pitch_reference = reference_interfaces_[2];
 
-  if (!std::isfinite(linear_command) || !std::isfinite(angular_command) || !std::isfinite(pitch_reference))
+  // Keep wheel command logic independent of pitch_reference, because wheel 
+  // commands -> diff_drive_controller -> odom -> ekf -> tf -> pitch_reference
+
+  if (!std::isfinite(linear_command) || !std::isfinite(angular_command))
   {
     // NaNs occur on initialization when the reference interfaces are not yet set
+    RCLCPP_WARN_SKIPFIRST_THROTTLE(
+      get_node()->get_logger(), *get_node()->get_clock(), params_.cmd_vel_timeout_seconds * 1000,
+      "Reference inferfaces are not finite: linear_command= %f, angular_command= %f. Not commanding wheels.", linear_command, angular_command);
     return controller_interface::return_type::OK;
   }
 
   // If the pitch is lower than the pitch_threshold_degrees_, then pass the command through untouched
-  if (pitch_reference < params_.pitch_threshold_degrees)
+  if (!std::isfinite(pitch_reference) || pitch_reference < params_.pitch_threshold_degrees)
   {
     if(pid_enabled_)
     {
@@ -254,7 +260,6 @@ controller_interface::return_type ProtobotBalanceController::update_and_write_co
   }
 
   // Set the command interfaces
-
   if(!command_interfaces_[0].set_value(linear_command))
   {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to set linear command");
