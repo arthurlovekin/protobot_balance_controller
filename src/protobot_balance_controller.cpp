@@ -1,7 +1,5 @@
 #include "protobot_balance_controller/protobot_balance_controller.hpp"
-#include "tf2/exceptions.h"
-#include "geometry_msgs/msg/transform_stamped.hpp"
-
+#include "tf2/utils.h"
 namespace protobot_balance_controller
 {
 
@@ -15,6 +13,7 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_init()
     param_listener_ = std::make_shared<ParamListener>(get_node());
     params_ = param_listener_->get_params();
     cmd_vel_buffer_ = realtime_tools::RealtimeBuffer<std::shared_ptr<geometry_msgs::msg::TwistStamped>>();
+    imu_buffer_ = realtime_tools::RealtimeBuffer<std::shared_ptr<sensor_msgs::msg::Imu>>();
   }
   catch (const std::exception & e)
   {
@@ -71,9 +70,31 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_configure(con
       }
     });
 
-  // create a tf listener to get the pitch of the odom->base_link transform
-  tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_node()->get_clock());
-  tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
+  imu_subscriber_ = get_node()->create_subscription<sensor_msgs::msg::Imu>(
+    "/imu/data", rclcpp::SystemDefaultsQoS(),
+    [this](const std::shared_ptr<sensor_msgs::msg::Imu> msg) -> void
+    {
+      if ((msg->header.stamp.sec == 0) && (msg->header.stamp.nanosec == 0))
+      {
+        RCLCPP_WARN_ONCE(
+          get_node()->get_logger(),
+          "Received IMU message with zero timestamp, setting it to current "
+          "time, this message will only be shown once");
+        msg->header.stamp = get_node()->get_clock()->now();
+      }
+
+      const double current_time = get_node()->now().seconds();
+      const double msg_time = rclcpp::Time(msg->header.stamp).seconds();
+      const double time_difference = current_time - msg_time;
+      if (time_difference < params_.cmd_vel_timeout_seconds)
+      {
+        imu_buffer_.writeFromNonRT(msg);
+      }
+      else
+      {
+        RCLCPP_WARN(get_node()->get_logger(), "Ignoring IMU message because it is older than the current time by %.10f seconds, which exceeds the allowed timeout (%.4f)", time_difference, params_.cmd_vel_timeout_seconds);
+      }
+    });
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -149,38 +170,30 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
       "Command message contains NaNs. Not updating reference interfaces.");
   }
 
-  // Get the pitch of the odom->base_link transform
-  geometry_msgs::msg::TransformStamped transform;
-  try {
-    transform = tf_buffer_->lookupTransform(
-      params_.odom_frame_id,
-      params_.base_frame_id,
-      tf2::TimePointZero
-    );
-  } catch (const tf2::TransformException & ex) {
-    RCLCPP_ERROR_SKIPFIRST_THROTTLE(
-      get_node()->get_logger(),
-      *get_node()->get_clock(),
-      params_.cmd_vel_timeout_seconds * 1000,
-      "Throttled Error: Not setting pitch reference because could not transform %s to %s (%s)",
-      params_.odom_frame_id.c_str(),
-      params_.base_frame_id.c_str(),
-      ex.what()
-    );
-    return controller_interface::return_type::OK;
-  }
-
-  tf2::Quaternion orientation(
-    transform.transform.rotation.x,
-    transform.transform.rotation.y,
-    transform.transform.rotation.z,
-    transform.transform.rotation.w
-  );
-  double roll, pitch, yaw;
-  tf2::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
-  if (std::isfinite(pitch))
+  // Get the pitch of the 
+  const std::shared_ptr<sensor_msgs::msg::Imu> imu_msg_ptr = *(imu_buffer_.readFromRT());
+  
+  if (imu_msg_ptr == nullptr)
   {
-    reference_interfaces_[2] = pitch;
+    RCLCPP_WARN(get_node()->get_logger(), "IMU message received was a nullptr, which should never happen. Was it configured correctly?");
+    return controller_interface::return_type::ERROR;
+  }
+  else if (std::isfinite(imu_msg_ptr->orientation.x) && std::isfinite(imu_msg_ptr->orientation.y) && std::isfinite(imu_msg_ptr->orientation.z) && std::isfinite(imu_msg_ptr->orientation.w))
+  {
+    tf2::Quaternion orientation(
+      imu_msg_ptr->orientation.x,
+      imu_msg_ptr->orientation.y,
+      imu_msg_ptr->orientation.z,
+      imu_msg_ptr->orientation.w
+    );
+
+    double roll_rad, pitch_rad, yaw_rad;
+    tf2::Matrix3x3(orientation).getRPY(roll_rad, pitch_rad, yaw_rad);
+    const double pitch_deg = pitch_rad * 180.0 / M_PI;
+    if (std::isfinite(pitch_deg))
+    {
+      reference_interfaces_[2] = pitch_deg;
+    }
   }
   else
   {
@@ -188,7 +201,7 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
       get_node()->get_logger(),
       *get_node()->get_clock(),
       params_.cmd_vel_timeout_seconds * 1000,
-      "Transform pitch is not finite. Not updating reference interfaces."
+      "IMU orientation is not finite. Not updating reference interfaces."
     );
   }
 
@@ -226,7 +239,6 @@ controller_interface::return_type ProtobotBalanceController::update_and_write_co
   else 
   {
     // If the pitch is higher than the pitch_threshold_degrees_, then apply the PID controller
-    // TODO: Implement PID controller
     if (!pid_enabled_) 
     {
       pid_enabled_ = true;
@@ -316,6 +328,15 @@ bool ProtobotBalanceController::reset_pid()
   nan_msg->twist.linear.x = std::numeric_limits<double>::quiet_NaN();
   nan_msg->twist.angular.z = std::numeric_limits<double>::quiet_NaN();
   cmd_vel_buffer_.writeFromNonRT(nan_msg);
+
+  imu_buffer_.reset();
+  std::shared_ptr<sensor_msgs::msg::Imu> nan_msg_imu = std::make_shared<sensor_msgs::msg::Imu>();
+  nan_msg_imu->header.stamp = get_node()->now();
+  nan_msg_imu->orientation.x = std::numeric_limits<double>::quiet_NaN();
+  nan_msg_imu->orientation.y = std::numeric_limits<double>::quiet_NaN();
+  nan_msg_imu->orientation.z = std::numeric_limits<double>::quiet_NaN();
+  nan_msg_imu->orientation.w = std::numeric_limits<double>::quiet_NaN();
+  imu_buffer_.writeFromNonRT(nan_msg_imu);
   return true;
 }
 
