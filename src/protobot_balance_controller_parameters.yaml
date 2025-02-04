@@ -17,16 +17,32 @@ protobot_balance_controller:
     }
   }
 
-  base_frame_id: {
+  pendulum_frame_id: {
     type: string,
-    default_value: "base_link",
-    description: "Find the pitch of the base_link with respect to the odom_frame"
+    default_value: "pendulum_frame",
+    description: "Find the pitch of the pendulum_frame with respect to the odom_frame. The pendulum_frame is oriented such that 0 pitch is balancing",
+    validation: {
+      not_empty<>: []
+    }
+  }
+
+  # will likely be removed in the future
+  imu_frame_id: {
+    type: string, 
+    default_value: "imu_link",
+    description: "Frame of the IMU (will be removed in the future in favor of a different node that keeps the tf state updated from IMU data)",
+    validation: {
+      not_empty<>: []
+    }
   }
 
   odom_frame_id: {
     type: string,
     default_value: "odom",
-    description: "Find the pitch of the base_link with respect to the odom_frame"
+    description: "Find the pitch of the pendulum_frame with respect to the odom_frame",
+    validation: {
+      not_empty<>: []
+    }
   }
 
   kp: {
@@ -59,22 +75,22 @@ protobot_balance_controller:
     description: "Minimum value for the integral term"
   }
 
-  pitch_0_degrees: {
-    type: double,
-    default_value: 30.0,
-    description: "Pitch of the robot when it is at its balancing point"
-  }
-
-  setpoint_gain: {
+  pitch_setpoint_gain: {
     type: double,
     default_value: 1.0,
-    description: "Scale the input linear velocity (m/s) into an angle (degrees) that gets added to pitch_0_degrees to determine the setpoint"
+    description: "Scale the input linear velocity (m/s) into an angle (degrees) to determine the pitch setpoint"
   }
 
-  pitch_threshold_degrees: {
+  pitch_threshold_degrees_min: {
+    type: double,
+    default_value: -20.0,
+    description: "If the pitch of the pendulum_frame wrt. odom_frame lies within the threshold min and max, then switch to balance-mode. Otherwise, stay in diff-drive mode."
+  }
+
+  pitch_threshold_degrees_max: {
     type: double,
     default_value: 20.0,
-    description: "If the pitch of the robot exceeds this threshold, then switch to balance-mode. Otherwise, stay in diff-drive mode."
+    description: "If the pitch of the pendulum_frame wrt. odom_frame lies within the threshold min and max, then switch to balance-mode. Otherwise, stay in diff-drive mode."
   }
 
   angular_velocity_gain: {

@@ -3,7 +3,8 @@ test_protobot_balance_controller:
     type: protobot_balance_controller/ProtobotBalanceController
     linear_command_interface: "linear"
     angular_command_interface: "angular"
-    base_link_frame_id: "base_link"
+    pendulum_frame_id: "pendulum_frame"
+    imu_frame_id: "imu_link"
     odom_frame_id: "odom"
 
     # PID parameters
@@ -13,17 +14,10 @@ test_protobot_balance_controller:
     antiwindup_integral_max: 10.0
     antiwindup_integral_min: -10.0
 
-    # the pitch of the robot when it is at its balancing point. 
-    # This is a function of the center of mass. 
-    pitch_0_degrees: 30.0
-
-    # linearly scales the input linear velocity (m/s) into an 
-    # angle (degrees) that gets added to pitch_0_degrees to determine the setpoint. 
-    setpoint_gain: 1.0
-
     # If the pitch of the robot exceeds this threshold, 
     # then switch to balance-mode. Otherwise, stay in diff-drive mode.
-    pitch_threshold_degrees: 0.0
+    pitch_threshold_degrees_min: -20.0
+    pitch_threshold_degrees_max: 20.0
 
     # Scale the angular velocity down by a constant factor
     angular_velocity_gain: 1.0

@@ -33,6 +33,10 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_configure(con
     RCLCPP_INFO(get_node()->get_logger(), "Parameters were updated");
   }
 
+  // create a tf listener to get the IMU->pendulum_mass transform
+  tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_node()->get_clock());
+  pendulum_wrt_imu_frame_ = geometry_msgs::msg::TransformStamped();
+
   cmd_vel_subscriber_ = get_node()->create_subscription<geometry_msgs::msg::TwistStamped>(
     "~/cmd_vel", rclcpp::SystemDefaultsQoS(),
     [this](const std::shared_ptr<geometry_msgs::msg::TwistStamped> msg) -> void
@@ -170,7 +174,36 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
       "Command message contains NaNs. Not updating reference interfaces.");
   }
 
-  // Get the pitch of the 
+  // Get the pendulum frame wrt the IMU frame (if it's not already set)
+  if(pendulum_wrt_imu_frame_.header.stamp.sec == 0 && pendulum_wrt_imu_frame_.header.stamp.nanosec == 0)
+  {
+    try {
+      pendulum_wrt_imu_frame_ = tf_buffer_->lookupTransform(
+        params_.imu_frame_id,
+        params_.pendulum_frame_id, // TODO: is this the right order?
+        tf2::TimePointZero
+      );
+      pendulum_wrt_imu_quat_ = tf2::Quaternion(
+        pendulum_wrt_imu_frame_.transform.rotation.x,
+        pendulum_wrt_imu_frame_.transform.rotation.y,
+        pendulum_wrt_imu_frame_.transform.rotation.z,
+        pendulum_wrt_imu_frame_.transform.rotation.w
+      );
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN_THROTTLE(
+        get_node()->get_logger(),
+        *get_node()->get_clock(),
+        1000,
+        "Not updating reference interfaces because could not transform %s to %s (%s). ",
+        params_.imu_frame_id.c_str(),
+        params_.pendulum_frame_id.c_str(),
+        ex.what()
+      );
+      return controller_interface::return_type::OK;
+    }
+  }
+
+  // Get the IMU orientation in the world frame
   const std::shared_ptr<sensor_msgs::msg::Imu> imu_msg_ptr = *(imu_buffer_.readFromRT());
   
   if (imu_msg_ptr == nullptr)
@@ -178,24 +211,11 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
     RCLCPP_WARN(get_node()->get_logger(), "IMU message received was a nullptr, which should never happen. Was it configured correctly?");
     return controller_interface::return_type::ERROR;
   }
-  else if (std::isfinite(imu_msg_ptr->orientation.x) && std::isfinite(imu_msg_ptr->orientation.y) && std::isfinite(imu_msg_ptr->orientation.z) && std::isfinite(imu_msg_ptr->orientation.w))
-  {
-    tf2::Quaternion orientation(
-      imu_msg_ptr->orientation.x,
-      imu_msg_ptr->orientation.y,
-      imu_msg_ptr->orientation.z,
-      imu_msg_ptr->orientation.w
-    );
-
-    double roll_rad, pitch_rad, yaw_rad;
-    tf2::Matrix3x3(orientation).getRPY(roll_rad, pitch_rad, yaw_rad);
-    const double pitch_deg = pitch_rad * 180.0 / M_PI;
-    if (std::isfinite(pitch_deg))
-    {
-      reference_interfaces_[2] = pitch_deg;
-    }
-  }
-  else
+  else if (!(
+    std::isfinite(imu_msg_ptr->orientation.x) &&
+    std::isfinite(imu_msg_ptr->orientation.y) &&
+    std::isfinite(imu_msg_ptr->orientation.z) &&
+    std::isfinite(imu_msg_ptr->orientation.w)))
   {
     RCLCPP_WARN_SKIPFIRST_THROTTLE(
       get_node()->get_logger(),
@@ -203,7 +223,31 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
       params_.cmd_vel_timeout_seconds * 1000,
       "IMU orientation is not finite. Not updating reference interfaces."
     );
+    return controller_interface::return_type::OK;
   }
+
+  tf2::Quaternion imu_wrt_world_quat(
+    imu_msg_ptr->orientation.x,
+    imu_msg_ptr->orientation.y,
+    imu_msg_ptr->orientation.z,
+    imu_msg_ptr->orientation.w
+  );
+
+  tf2::Quaternion pendulum_wrt_world_quat = imu_wrt_world_quat * pendulum_wrt_imu_quat_;
+
+  // isolate the pitch of the pendulum frame
+  double roll_rad, pitch_rad, yaw_rad;
+  tf2::Matrix3x3(pendulum_wrt_world_quat).getRPY(roll_rad, pitch_rad, yaw_rad);
+
+  const double pitch_deg = pitch_rad * 180.0 / M_PI;
+  if (!std::isfinite(pitch_deg))
+  {
+    RCLCPP_WARN(get_node()->get_logger(), "Final Calculated Pitch is not finite. Not updating reference interfaces.");
+    return controller_interface::return_type::OK;
+
+  }
+
+  reference_interfaces_[2] = pitch_deg;
 
   return controller_interface::return_type::OK;
 }
@@ -228,7 +272,7 @@ controller_interface::return_type ProtobotBalanceController::update_and_write_co
   }
 
   // If the pitch is lower than the pitch_threshold_degrees_, then pass the command through untouched
-  if (!std::isfinite(pitch_reference) || pitch_reference < params_.pitch_threshold_degrees)
+  if (!std::isfinite(pitch_reference) || pitch_reference < params_.pitch_threshold_degrees_min || pitch_reference > params_.pitch_threshold_degrees_max)
   {
     if(pid_enabled_)
     {
@@ -250,7 +294,7 @@ controller_interface::return_type ProtobotBalanceController::update_and_write_co
       RCLCPP_INFO_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000, "PID parameters were updated (logs every second)");
     }
 
-    pitch_setpoint_degrees_ = params_.pitch_0_degrees + params_.setpoint_gain * linear_command;
+    pitch_setpoint_degrees_ = params_.pitch_setpoint_gain * linear_command;
     pitch_error_ = pitch_reference - pitch_setpoint_degrees_;
     pitch_derivative_ = (pitch_error_ - prev_pitch_error_) / period.seconds();
     pitch_integral_ += pitch_error_ * period.seconds();
@@ -315,7 +359,7 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_error(
 bool ProtobotBalanceController::reset_pid()
 {
   pid_enabled_ = false;
-  pitch_setpoint_degrees_ = params_.pitch_0_degrees;
+  pitch_setpoint_degrees_ = 0.0;
   pitch_error_ = 0.0;
   prev_pitch_error_ = 0.0;
   pitch_integral_ = 0.0;

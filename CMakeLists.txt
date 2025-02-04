@@ -16,6 +16,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   rclcpp_lifecycle
   geometry_msgs
   tf2
+  tf2_ros
   sensor_msgs
   pluginlib
   controller_interface
