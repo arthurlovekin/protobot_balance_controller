@@ -20,7 +20,7 @@ protobot_balance_controller:
   pendulum_frame_id: {
     type: string,
     default_value: "pendulum_frame",
-    description: "Find the pitch of the pendulum_frame with respect to the odom_frame. The pendulum_frame is oriented such that 0 pitch is balancing",
+    description: "Find the pitch of the pendulum_frame with respect to the world frame. The pendulum_frame is oriented such that 0 pitch is balancing",
     validation: {
       not_empty<>: []
     }
@@ -31,15 +31,6 @@ protobot_balance_controller:
     type: string, 
     default_value: "imu_link",
     description: "Frame of the IMU (will be removed in the future in favor of a different node that keeps the tf state updated from IMU data)",
-    validation: {
-      not_empty<>: []
-    }
-  }
-
-  odom_frame_id: {
-    type: string,
-    default_value: "odom",
-    description: "Find the pitch of the pendulum_frame with respect to the odom_frame",
     validation: {
       not_empty<>: []
     }
@@ -84,13 +75,13 @@ protobot_balance_controller:
   pitch_threshold_degrees_min: {
     type: double,
     default_value: -20.0,
-    description: "If the pitch of the pendulum_frame wrt. odom_frame lies within the threshold min and max, then switch to balance-mode. Otherwise, stay in diff-drive mode."
+    description: "If the pitch of the pendulum_frame wrt. world lies within the threshold min and max, then switch to balance-mode. Otherwise, stay in diff-drive mode."
   }
 
   pitch_threshold_degrees_max: {
     type: double,
     default_value: 20.0,
-    description: "If the pitch of the pendulum_frame wrt. odom_frame lies within the threshold min and max, then switch to balance-mode. Otherwise, stay in diff-drive mode."
+    description: "If the pitch of the pendulum_frame wrt. world lies within the threshold min and max, then switch to balance-mode. Otherwise, stay in diff-drive mode."
   }
 
   angular_velocity_gain: {

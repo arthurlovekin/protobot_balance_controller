@@ -5,7 +5,6 @@ test_protobot_balance_controller:
     angular_command_interface: "angular"
     pendulum_frame_id: "pendulum_frame"
     imu_frame_id: "imu_link"
-    odom_frame_id: "odom"
 
     # PID parameters
     kp: 1.0
