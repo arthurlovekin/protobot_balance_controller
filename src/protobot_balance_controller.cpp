@@ -35,6 +35,7 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_configure(con
 
   // create a tf listener to get the IMU->pendulum_mass transform
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_node()->get_clock());
+  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
   pendulum_wrt_imu_frame_ = geometry_msgs::msg::TransformStamped();
 
   cmd_vel_subscriber_ = get_node()->create_subscription<geometry_msgs::msg::TwistStamped>(
