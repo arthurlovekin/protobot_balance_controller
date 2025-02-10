@@ -4,6 +4,7 @@
 #include "controller_interface/chainable_controller_interface.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "sensor_msgs/msg/imu.hpp"
+#include "sensor_msgs/msg/joy.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
 #include "tf2_ros/transform_listener.h"
 #include "tf2_ros/buffer.h"
@@ -76,6 +77,8 @@ class ProtobotBalanceController : public controller_interface::ChainableControll
     // Subscribers to fill the realtime buffers (in liu of state interfaces)
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_subscriber_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subscriber_;
+    rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
+
 
     // tf2 used to get IMU frame. (TODO: In a more thorough implementation, 
     // some other node should keep tf state updated
@@ -91,6 +94,12 @@ class ProtobotBalanceController : public controller_interface::ChainableControll
     // upstream controller (realtime). This gets read from in update_and_write_commands()
     realtime_tools::RealtimeBuffer<std::shared_ptr<geometry_msgs::msg::TwistStamped>> cmd_vel_buffer_;
     realtime_tools::RealtimeBuffer<std::shared_ptr<sensor_msgs::msg::Imu>> imu_buffer_;
+    // TODO: read params_.kp, params_.ki, params_.kd from the parameter server. The trick is locking the mutex as you write from a non-realtime context so that it doesn't segfault when the realtime thread reads rapidly from it.
+    realtime_tools::RealtimeBuffer<double> kp_buffer_;
+    realtime_tools::RealtimeBuffer<double> ki_buffer_;
+    realtime_tools::RealtimeBuffer<double> kd_buffer_;
+    std::shared_ptr<sensor_msgs::msg::Joy> prev_joy_msg_;
+    double delta_{0};
 
     // Chainable controller also has extra functions to switch in and out of chained mode
     std::vector<hardware_interface::CommandInterface> on_export_reference_interfaces() override;

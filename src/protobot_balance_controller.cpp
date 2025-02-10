@@ -14,6 +14,10 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_init()
     params_ = param_listener_->get_params();
     cmd_vel_buffer_ = realtime_tools::RealtimeBuffer<std::shared_ptr<geometry_msgs::msg::TwistStamped>>();
     imu_buffer_ = realtime_tools::RealtimeBuffer<std::shared_ptr<sensor_msgs::msg::Imu>>();
+    kp_buffer_ = realtime_tools::RealtimeBuffer<double>();
+    ki_buffer_ = realtime_tools::RealtimeBuffer<double>();
+    kd_buffer_ = realtime_tools::RealtimeBuffer<double>();
+    prev_joy_msg_ = std::make_shared<sensor_msgs::msg::Joy>();
   }
   catch (const std::exception & e)
   {
@@ -101,6 +105,101 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_configure(con
       }
     });
 
+  joy_subscriber_ = get_node()->create_subscription<sensor_msgs::msg::Joy>(
+    "/joy", rclcpp::SystemDefaultsQoS(),
+    [this](const std::shared_ptr<sensor_msgs::msg::Joy> msg) -> void
+    {
+      if ((msg->header.stamp.sec == 0) && (msg->header.stamp.nanosec == 0))
+      {
+        RCLCPP_WARN_ONCE(
+          get_node()->get_logger(),
+          "Received joy message with zero timestamp, setting it to current "
+          "time, this message will only be shown once");
+        msg->header.stamp = get_node()->get_clock()->now();
+      }
+
+      const double current_time = get_node()->now().seconds();
+      const double msg_time = rclcpp::Time(msg->header.stamp).seconds();
+      double time_difference = current_time - msg_time;
+      if (time_difference > params_.cmd_vel_timeout_seconds)
+      {
+        RCLCPP_WARN(get_node()->get_logger(), "Ignoring joy message because it is older than the current time by %.10f seconds, which exceeds the allowed timeout (%.4f)", time_difference, params_.cmd_vel_timeout_seconds);
+        return;
+      }
+
+      auto linear_map
+      {
+        [](double x, double x_min, double x_max, double y_min, double y_max) -> double
+        {
+          return y_min + ((y_max - y_min) / (x_max - x_min)) * (x - x_min);
+        }
+      };
+
+      // Press A or B button -> enable changing kp or kd{}
+      // press right trigger -> raise enabled parameter (kp or kd)
+      // press left trigger -> lower enabled parameter (kp or kd)
+      if(msg->buttons[0] == 1 || msg->buttons[1] == 1)
+      {
+        // axes initial value: 1, range [1,-1]. 
+        // I want initial value: 0 range [0,1] on right axis and [0,-1] on left
+        double right = linear_map(msg->axes[5]-1.0, -2.0, 0.0, 1.0, 0.0);
+        double left = linear_map(msg->axes[2]-1.0, -2.0, 0.0, -1.0, 0.0);
+        delta_ = right + left;
+        
+        RCLCPP_INFO_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 500, "right: %f left: %f, delta= %f", right, left, delta_);
+      }
+
+      if(prev_joy_msg_ == nullptr)
+      {
+        RCLCPP_WARN(get_node()->get_logger(), "previous joy message is null");
+        prev_joy_msg_ = msg;
+        return;
+      }
+      const double prev_msg_time = rclcpp::Time(prev_joy_msg_->header.stamp).seconds();
+      const double msg_time_difference = msg_time - prev_msg_time;
+      if(msg_time_difference > params_.cmd_vel_timeout_seconds)
+      {
+        RCLCPP_WARN(get_node()->get_logger(), "Ignoring joy message because it is older than the previous message by %.10f seconds, which exceeds the allowed timeout (%.4f)", msg_time_difference, params_.cmd_vel_timeout_seconds);
+        prev_joy_msg_ = msg;
+        return;
+      }
+      else if(prev_joy_msg_->buttons.size() <= 0)
+      {
+        RCLCPP_WARN(get_node()->get_logger(), "Previous Joy message contains no buttons");
+        prev_joy_msg_ = msg;
+        return;
+      }
+
+      bool a_button_pressed = (msg->buttons[0] == 1 && prev_joy_msg_->buttons[0] == 0);
+      bool a_button_released = (msg->buttons[0] == 0 && prev_joy_msg_->buttons[0] == 1);
+      bool b_button_pressed = (msg->buttons[1] == 1 && prev_joy_msg_->buttons[1] == 0);
+      bool b_button_released = (msg->buttons[1] == 0 && prev_joy_msg_->buttons[1] == 1);
+      if(a_button_pressed)
+      {
+        RCLCPP_INFO(get_node()->get_logger(), "A button pressed: editing kp: %f", params_.kp);
+      }
+      else if(a_button_released)
+      {
+        params_.kp += delta_;
+        RCLCPP_INFO(get_node()->get_logger(), "A button released, kp: %f", params_.kp);
+
+        kp_buffer_.writeFromNonRT(params_.kp);
+      }
+      if(b_button_pressed)
+      {
+        RCLCPP_INFO(get_node()->get_logger(), "B button pressed: editing kd: %f", params_.kd);
+      }
+      else if(b_button_released)
+      {
+        params_.kd += delta_;
+        RCLCPP_INFO(get_node()->get_logger(), "B button released, kd: %f", params_.kd);
+
+        kd_buffer_.writeFromNonRT(params_.kd);
+      }
+
+      prev_joy_msg_ = msg;
+    });
+
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
@@ -145,6 +244,7 @@ controller_interface::CallbackReturn ProtobotBalanceController::on_deactivate(
 controller_interface::return_type ProtobotBalanceController::update_reference_from_subscribers(
   const rclcpp::Time & time, const rclcpp::Duration & /*period*/)
 {
+  //// Cmd_vel
   const std::shared_ptr<geometry_msgs::msg::TwistStamped> command_msg_ptr = *(cmd_vel_buffer_.readFromRT());
 
   if (command_msg_ptr == nullptr)
@@ -174,6 +274,8 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
       get_node()->get_logger(), *get_node()->get_clock(), params_.cmd_vel_timeout_seconds * 1000,
       "Command message contains NaNs. Not updating reference interfaces.");
   }
+
+  //// IMU
 
   // Get the pendulum frame wrt the IMU frame (if it's not already set)
   if(pendulum_wrt_imu_frame_.header.stamp.sec == 0 && pendulum_wrt_imu_frame_.header.stamp.nanosec == 0)
@@ -250,6 +352,19 @@ controller_interface::return_type ProtobotBalanceController::update_reference_fr
 
   reference_interfaces_[2] = pitch_deg;
 
+  //// Joy
+  const double kp = *(kp_buffer_.readFromRT());
+  const double ki = *(ki_buffer_.readFromRT());
+  const double kd = *(kd_buffer_.readFromRT());
+  if(!std::isfinite(kp) || !std::isfinite(ki) || !std::isfinite(kd))
+  {
+    RCLCPP_WARN(get_node()->get_logger(), "KP, KI, or KD is not finite. Not updating reference interfaces.");
+    return controller_interface::return_type::OK;
+  }
+  reference_interfaces_[3] = kp;
+  reference_interfaces_[4] = ki;
+  reference_interfaces_[5] = kd;
+
   return controller_interface::return_type::OK;
 }
 
@@ -259,6 +374,10 @@ controller_interface::return_type ProtobotBalanceController::update_and_write_co
   double linear_command = reference_interfaces_[0];
   double angular_command = reference_interfaces_[1];
   const double pitch_reference = reference_interfaces_[2];
+  const double kp = reference_interfaces_[3];
+  const double ki = reference_interfaces_[4];
+  const double kd = reference_interfaces_[5];
+  RCLCPP_INFO_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 500, "KP: %f, KI: %f, KD: %f", kp, ki, kd);
 
   // Keep wheel command logic independent of pitch_reference, because wheel 
   // commands -> diff_drive_controller -> odom -> ekf -> tf -> pitch_reference
@@ -309,9 +428,9 @@ controller_interface::return_type ProtobotBalanceController::update_and_write_co
     }
 
     linear_command = 
-      params_.kp * pitch_error_ +
-      params_.ki * pitch_integral_ + 
-      params_.kd * pitch_derivative_;
+      kp * pitch_error_ +
+      ki * pitch_integral_ + 
+      kd * pitch_derivative_;
     angular_command = params_.angular_velocity_gain * angular_command;
     prev_pitch_error_ = pitch_error_;
   }
@@ -382,13 +501,21 @@ bool ProtobotBalanceController::reset_pid()
   nan_msg_imu->orientation.z = std::numeric_limits<double>::quiet_NaN();
   nan_msg_imu->orientation.w = std::numeric_limits<double>::quiet_NaN();
   imu_buffer_.writeFromNonRT(nan_msg_imu);
+
+  kp_buffer_.reset();
+  ki_buffer_.reset();
+  kd_buffer_.reset();
+  kp_buffer_.writeFromNonRT(params_.kp);
+  ki_buffer_.writeFromNonRT(params_.ki);
+  kd_buffer_.writeFromNonRT(params_.kd);
+
   return true;
 }
 
 std::vector<hardware_interface::CommandInterface> ProtobotBalanceController::on_export_reference_interfaces()
 {
   // inputs to this controller: linear command, angular command
-  const int n_reference_interfaces = 3; 
+  const int n_reference_interfaces = 6; 
   reference_interfaces_.resize(n_reference_interfaces, std::numeric_limits<double>::quiet_NaN());
   std::vector<hardware_interface::CommandInterface> reference_interfaces;
   reference_interfaces.reserve(n_reference_interfaces);
@@ -402,7 +529,15 @@ std::vector<hardware_interface::CommandInterface> ProtobotBalanceController::on_
   reference_interfaces.push_back(hardware_interface::CommandInterface(
     get_node()->get_name(), std::string("pitch"),
     &reference_interfaces_[2]));
-
+  reference_interfaces.push_back(hardware_interface::CommandInterface(
+    get_node()->get_name(), std::string("kp"),
+    &reference_interfaces_[3]));
+  reference_interfaces.push_back(hardware_interface::CommandInterface(
+    get_node()->get_name(), std::string("ki"),
+    &reference_interfaces_[4]));
+  reference_interfaces.push_back(hardware_interface::CommandInterface(
+    get_node()->get_name(), std::string("kd"),
+    &reference_interfaces_[5]));
   return reference_interfaces;
 }
 
